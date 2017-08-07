@@ -20,7 +20,6 @@
 #include <esp_secure_boot.h>
 #include <esp_log.h>
 #include <bootloader_flash.h>
-#include <bootloader_random.h>
 #include <bootloader_sha.h>
 
 static const char *TAG = "esp_image";
@@ -32,13 +31,6 @@ static const char *TAG = "esp_image";
 
 /* Headroom to ensure between stack SP (at time of checking) and data loaded from flash */
 #define STACK_LOAD_HEADROOM 32768
-
-#ifdef BOOTLOADER_BUILD
-/* 64 bits of random data to obfuscate loaded RAM with, until verification is complete
-   (Means loaded code isn't executable until after the secure boot check.)
-*/
-static uint32_t ram_obfs_value[2];
-#endif
 
 /* Return true if load_addr is an address the bootloader should load into */
 static bool should_load(uint32_t load_addr);
@@ -80,6 +72,7 @@ esp_err_t esp_image_load(esp_image_load_mode_t mode, const esp_partition_pos_t *
     // checksum the image a word at a time. This shaves 30-40ms per MB of image size
     uint32_t checksum_word = ESP_ROM_CHECKSUM_INITIAL;
     bootloader_sha256_handle_t sha_handle = NULL;
+    bool do_check = rtc_get_reset_reason(0) != DEEPSLEEP_RESET;
 
     if (data == NULL || part == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -103,7 +96,7 @@ esp_err_t esp_image_load(esp_image_load_mode_t mode, const esp_partition_pos_t *
 #ifdef CONFIG_SECURE_BOOT_ENABLED
     if (1) {
 #else
-    if (data->image.hash_appended) {
+    if (data->image.hash_appended && do_check) {
 #endif
         sha_handle = bootloader_sha256_start();
         if (sha_handle == NULL) {
@@ -119,9 +112,12 @@ esp_err_t esp_image_load(esp_image_load_mode_t mode, const esp_partition_pos_t *
              data->image.spi_size,
              data->image.entry_addr);
 
-    err = verify_image_header(data->start_addr, &data->image, silent);
-    if (err != ESP_OK) {
+    if (do_check)
+    {
+        err = verify_image_header(data->start_addr, &data->image, silent);
+        if (err != ESP_OK) {
 goto err;
+        }
     }
 
     if (data->image.segment_count > ESP_IMAGE_MAX_SEGMENTS) {
@@ -171,20 +167,6 @@ goto err;
         sha_handle = NULL;
         if (err != ESP_OK) {
             goto err;
-        }
-    }
-#endif
-
-#ifdef BOOTLOADER_BUILD
-    if (do_load) { // Need to deobfuscate RAM
-        for (int i = 0; i < data->image.segment_count; i++) {
-            uint32_t load_addr = data->segments[i].load_addr;
-            if (should_load(load_addr)) {
-                uint32_t *loaded = (uint32_t *)load_addr;
-                for (int j = 0; j < data->segments[i].data_len/sizeof(uint32_t); j++) {
-                    loaded[j] ^= (j & 1) ? ram_obfs_value[0] : ram_obfs_value[1];
-                }
-            }
         }
     }
 #endif
@@ -288,32 +270,27 @@ static esp_err_t process_segment(int index, uint32_t flash_addr, esp_image_segme
         return ESP_FAIL;
     }
 
-#ifdef BOOTLOADER_BUILD
-    // Set up the obfuscation value to use for loading
-    while (ram_obfs_value[0] == 0 || ram_obfs_value[1] == 0) {
-        bootloader_fill_random(ram_obfs_value, sizeof(ram_obfs_value));
+    const uint32_t *checksum_from;
+    if (do_load) {
+        memcpy((void *)load_addr, data, data_len);
+        checksum_from = (const uint32_t *)load_addr;
+    } else {
+        checksum_from = (const uint32_t *)data;
     }
-    uint32_t *dest = (uint32_t *)load_addr;
-#endif
 
-    const uint32_t *src = data;
-
-    for (int i = 0; i < data_len; i += 4) {
+    // Update checksum, either from RAM we just loaded or from flash
+    for (int i = 0; (i < data_len) && (sha_handle != NULL); i += 4) {
         int w_i = i/4; // Word index
-        uint32_t w = src[w_i];
+        uint32_t w = checksum_from[w_i];
         *checksum ^= w;
-#ifdef BOOTLOADER_BUILD
-        if (do_load) {
-            dest[w_i] = w ^ ((w_i & 1) ? ram_obfs_value[0] : ram_obfs_value[1]);
-        }
-#endif
+
         // SHA_CHUNK determined experimentally as the optimum size
         // to call bootloader_sha256_data() with. This is a bit
         // counter-intuitive, but it's ~3ms better than using the
         // SHA256 block size.
         const size_t SHA_CHUNK = 1024;
         if (sha_handle != NULL && i % SHA_CHUNK == 0) {
-            bootloader_sha256_data(sha_handle, &src[w_i],
+            bootloader_sha256_data(sha_handle, &checksum_from[w_i],
                                    MIN(SHA_CHUNK, data_len - i));
         }
     }
@@ -419,19 +396,19 @@ static esp_err_t verify_checksum(bootloader_sha256_handle_t sha_handle, uint32_t
     uint32_t length = unpadded_length + 1; // Add a byte for the checksum
     length = (length + 15) & ~15; // Pad to next full 16 byte block
 
-    // Verify checksum
-    uint8_t buf[16];
-    esp_err_t err = bootloader_flash_read(data->start_addr + unpadded_length, buf, length - unpadded_length, true);
-    uint8_t calc = buf[length - unpadded_length - 1];
-    uint8_t checksum = (checksum_word >> 24)
-        ^ (checksum_word >> 16)
-        ^ (checksum_word >> 8)
-        ^ (checksum_word >> 0);
-    if (err != ESP_OK || checksum != calc) {
-        ESP_LOGE(TAG, "Checksum failed. Calculated 0x%x read 0x%x", checksum, calc);
-        return ESP_ERR_IMAGE_INVALID;
-    }
     if (sha_handle != NULL) {
+        // Verify checksum
+        uint8_t buf[16];
+        esp_err_t err = bootloader_flash_read(data->start_addr + unpadded_length, buf, length - unpadded_length, true);
+        uint8_t calc = buf[length - unpadded_length - 1];
+        uint8_t checksum = (checksum_word >> 24)
+            ^ (checksum_word >> 16)
+            ^ (checksum_word >> 8)
+            ^ (checksum_word >> 0);
+        if (err != ESP_OK || checksum != calc) {
+            ESP_LOGE(TAG, "Checksum failed. Calculated 0x%x read 0x%x", checksum, calc);
+            return ESP_ERR_IMAGE_INVALID;
+        }
         bootloader_sha256_data(sha_handle, buf, length - unpadded_length);
     }
 
