@@ -25,6 +25,7 @@ INPUT = \
     ## Wi-Fi - API Reference
     ##
     ../components/esp32/include/esp_wifi.h \
+    ../components/esp32/include/esp_wifi_crypto_types.h \
     ../components/esp32/include/esp_smartconfig.h \
     ## Bluetooth - API Reference
     ## Controller && VHCI
@@ -71,6 +72,7 @@ INPUT = \
     ../components/driver/include/driver/spi_master.h \
     ../components/driver/include/driver/spi_slave.h \
     ../components/driver/include/driver/timer.h \
+    ../components/driver/include/driver/touch_pad.h \
     ../components/driver/include/driver/uart.h \
     ##
     ## Protocols - API Reference
