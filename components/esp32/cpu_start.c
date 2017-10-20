@@ -150,6 +150,7 @@ void IRAM_ATTR call_start_cpu0()
     }
 
 #if CONFIG_SPIRAM_BOOT_INIT
+    esp_spiram_init_cache();
     if (esp_spiram_init() != ESP_OK) {
         ESP_EARLY_LOGE(TAG, "Failed to init external RAM!");
         abort();
@@ -378,8 +379,10 @@ void start_cpu1_default(void)
 
 static void do_global_ctors(void)
 {
+#ifdef CONFIG_CXX_EXCEPTIONS
     static struct object ob;
     __register_frame_info( __eh_frame, &ob );
+#endif
 
     void (**p)(void);
     for (p = &__init_array_end - 1; p >= &__init_array_start; --p) {
