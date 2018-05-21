@@ -407,6 +407,7 @@ esp_err_t uart_set_pin(uart_port_t uart_num, int tx_io_num, int rx_io_num, int r
     UART_CHECK((cts_io_num < 0 || (GPIO_IS_VALID_GPIO(cts_io_num))), "cts_io_num error", ESP_FAIL);
 
     int tx_sig, rx_sig, rts_sig, cts_sig;
+    uint32_t inverse_mask = 0;
     switch(uart_num) {
         case UART_NUM_0:
             tx_sig = U0TXD_OUT_IDX;
@@ -442,7 +443,18 @@ esp_err_t uart_set_pin(uart_port_t uart_num, int tx_io_num, int rx_io_num, int r
 
     if(rx_io_num >= 0) {
         PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[rx_io_num], PIN_FUNC_GPIO);
-        gpio_set_pull_mode(rx_io_num, GPIO_PULLUP_ONLY);
+        /*
+         * Set pull mode in accordance with the inverse mode:
+         *  - set PULL DOWN if RX is in inversed mode
+         *  - set PULL UP otherwise
+         */
+        uart_get_line_inverse(uart_num, &inverse_mask);
+        if (inverse_mask & UART_INVERSE_RXD) {
+            gpio_set_pull_mode(rx_io_num, GPIO_PULLDOWN_ONLY);
+        }
+        else {
+            gpio_set_pull_mode(rx_io_num, GPIO_PULLUP_ONLY);
+        }
         gpio_set_direction(rx_io_num, GPIO_MODE_INPUT);
         gpio_matrix_in(rx_io_num, rx_sig, 0);
     }
