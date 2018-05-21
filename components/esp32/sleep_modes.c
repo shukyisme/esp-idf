@@ -393,6 +393,10 @@ esp_err_t esp_sleep_enable_ext1_wakeup(uint64_t mask, esp_sleep_ext1_wakeup_mode
     return ESP_OK;
 }
 
+extern void gpio_pull_disable(int gpio, uint8_t *pullup_dis, uint8_t *pulldown_dis);
+
+__attribute__((weak)) void gpio_pull_disable(int gpio, uint8_t *pullup_dis, uint8_t *pulldown_dis) {}
+
 static void ext1_wakeup_prepare()
 {
     // Configure all RTC IOs selected as ext1 wakeup inputs
@@ -416,8 +420,17 @@ static void ext1_wakeup_prepare()
             // RTC_PERIPH will be disabled, so need to enable input and
             // lock pad configuration. Pullups/pulldowns also need to be disabled.
             REG_SET_BIT(desc->reg, desc->ie);
-            REG_CLR_BIT(desc->reg, desc->pulldown);
-            REG_CLR_BIT(desc->reg, desc->pullup);
+            uint8_t pullup_dis = 1;
+            uint8_t pulldown_dis = 1;
+            gpio_pull_disable(gpio, &pullup_dis, &pulldown_dis);
+            if (pulldown_dis) {
+                ESP_LOGI(TAG, "Disable pulldown gpio %d", gpio);
+                REG_CLR_BIT(desc->reg, desc->pulldown);
+            }
+            if (pullup_dis) {
+                ESP_LOGI(TAG, "Disable pullup gpio %d", gpio);
+                REG_CLR_BIT(desc->reg, desc->pullup);
+            }
             REG_SET_BIT(RTC_CNTL_HOLD_FORCE_REG, desc->hold_force);
         }
         // Keep track of pins which are processed to bail out early
