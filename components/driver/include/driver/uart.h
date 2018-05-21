@@ -244,6 +244,18 @@ esp_err_t uart_set_baudrate(uart_port_t uart_num, uint32_t baudrate);
 esp_err_t uart_get_baudrate(uart_port_t uart_num, uint32_t* baudrate);
 
 /**
+ * @brief Get UART line inverse mode
+ *
+ * @param uart_num  UART_NUM_0, UART_NUM_1 or UART_NUM_2
+ * @param inverse_mask Pointer to accept value of inverse_mask
+ *
+ * @return
+ *     - ESP_FAIL Parameter error
+ *     - ESP_OK   Success, result will be put in (*inverse_mask)
+ */
+esp_err_t uart_get_line_inverse(uart_port_t uart_num, uint32_t *inverse_mask);
+
+/**
  * @brief Set UART line inverse mode
  *
  * @param uart_num  UART_NUM_0, UART_NUM_1 or UART_NUM_2
