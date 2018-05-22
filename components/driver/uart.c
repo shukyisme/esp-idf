@@ -437,7 +437,18 @@ esp_err_t uart_set_pin(uart_port_t uart_num, int tx_io_num, int rx_io_num, int r
     }
     if(tx_io_num >= 0) {
         PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[tx_io_num], PIN_FUNC_GPIO);
-        gpio_set_level(tx_io_num, 1);
+        /*
+         * Set pull mode in accordance with the inverse mode:
+         *  - set PULL DOWN if RX is in inversed mode
+         *  - set PULL UP otherwise
+         */
+        uart_get_line_inverse(uart_num, &inverse_mask);
+        if (inverse_mask & UART_INVERSE_TXD) {
+            gpio_set_level(tx_io_num, 0);
+        }
+        else {
+            gpio_set_level(tx_io_num, 1);
+        }
         gpio_matrix_out(tx_io_num, tx_sig, 0, 0);
     }
 
